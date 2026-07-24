@@ -1712,6 +1712,11 @@ pub fn start_thumbnail_workers(app_handle: tauri::AppHandle) {
 
         std::thread::spawn(move || {
             loop {
+                if manager_clone.image_loading_in_progress.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    continue;
+                }
+
                 let path_to_process: String = {
                     let mut queue = manager_clone.queue.lock().unwrap();
                     while queue.is_empty() {

@@ -104,6 +104,7 @@ pub struct ThumbnailManager {
     pub processing_now: Mutex<HashSet<String>>,
     pub rotational_disk: AtomicBool,
     pub io_gate: Mutex<()>,
+    pub image_loading_in_progress: AtomicBool,
 }
 
 impl ThumbnailManager {
@@ -114,6 +115,7 @@ impl ThumbnailManager {
             processing_now: Mutex::new(HashSet::new()),
             rotational_disk: AtomicBool::new(false),
             io_gate: Mutex::new(()),
+            image_loading_in_progress: AtomicBool::new(false),
         })
     }
 }

@@ -53,6 +53,7 @@ dependencies = [
  "reqwest",
  "rgb",
  "rustls-platform-verifier",
+ "scopeguard",
  "serde",
  "serde_json",
  "sha2 0.11.0",

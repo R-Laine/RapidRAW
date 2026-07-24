@@ -754,6 +754,18 @@ pub async fn load_image(
     let generation_tracker = state.load_image_generation.clone();
     let cancel_token = Some((generation_tracker.clone(), my_generation));
 
+    state
+        .thumbnail_manager
+        .image_loading_in_progress
+        .store(true, Ordering::SeqCst);
+
+    let _guard = scopeguard::guard((), |_| {
+        state
+            .thumbnail_manager
+            .image_loading_in_progress
+            .store(false, Ordering::SeqCst);
+    });
+
     {
         *state.original_image.lock().unwrap() = None;
         *state.cached_preview.lock().unwrap() = None;
@@ -795,10 +807,19 @@ pub async fn load_image(
             ));
         }
 
+        let is_rotational = state.thumbnail_manager.rotational_disk.load(Ordering::Relaxed);
+        let manager = state.thumbnail_manager.clone();
+
         let (pristine_img, exif_data_loaded) = tokio::task::spawn_blocking(move || {
             if generation_tracker.load(Ordering::SeqCst) != my_generation {
                 return Err("Load cancelled".to_string());
             }
+
+            let _io_permit = if is_rotational {
+                Some(manager.io_gate.lock().unwrap())
+            } else {
+                None
+            };
 
             let result: Result<(DynamicImage, HashMap<String, String>), String> =
                 (|| match read_file_mapped(Path::new(&path_clone)) {
