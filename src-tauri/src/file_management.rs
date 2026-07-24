@@ -931,7 +931,7 @@ pub fn get_album_images(
             };
 
             Some(ImageFile {
-                path: virtual_path,
+                path: virtual_path.to_string(),
                 modified,
                 is_edited,
                 tags,
