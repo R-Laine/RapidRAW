@@ -248,23 +248,32 @@ fn cancel_thumbnail_generation(
     Ok(())
 }
 
-pub fn get_cached_full_warped_image(
+pub(crate) fn get_cached_full_warped_image_path_aware(
     state: &tauri::State<AppState>,
+    path: &str,
+    base_image: &DynamicImage,
+    is_raw: bool,
     js_adjustments: &serde_json::Value,
 ) -> Result<Arc<DynamicImage>, String> {
     let geo_hash = calculate_geometry_hash(js_adjustments);
 
+    let cache_key = {
+        let mut hasher = DefaultHasher::new();
+        path.hash(&mut hasher);
+        geo_hash.hash(&mut hasher);
+        hasher.finish()
+    };
+
     {
         let cache_lock = state.full_warped_cache.lock().unwrap();
         if let Some((hash, img)) = cache_lock.as_ref()
-            && *hash == geo_hash
+            && *hash == cache_key
         {
             return Ok(Arc::clone(img));
         }
     }
 
-    let (base_arc, is_raw) = get_original_image(state)?;
-    let mut cow_image = Cow::Borrowed(base_arc.as_ref());
+    let mut cow_image = Cow::Borrowed(base_image);
 
     if is_raw {
         apply_cpu_default_raw_processing(cow_image.to_mut());
@@ -275,10 +284,38 @@ pub fn get_cached_full_warped_image(
 
     {
         let mut cache_lock = state.full_warped_cache.lock().unwrap();
-        *cache_lock = Some((geo_hash, Arc::clone(&warped_arc)));
+        *cache_lock = Some((cache_key, Arc::clone(&warped_arc)));
     }
 
     Ok(warped_arc)
+}
+
+pub fn get_original_image_with_path(
+    state: &tauri::State<AppState>,
+) -> Result<(String, Arc<image::DynamicImage>, bool), String> {
+    let original_image_lock = state.original_image.lock().unwrap();
+    let loaded_image = original_image_lock
+        .as_ref()
+        .ok_or("No original image loaded")?;
+    Ok((
+        loaded_image.path.clone(),
+        Arc::clone(&loaded_image.image),
+        loaded_image.is_raw,
+    ))
+}
+
+pub fn get_cached_full_warped_image(
+    state: &tauri::State<AppState>,
+    js_adjustments: &serde_json::Value,
+) -> Result<Arc<DynamicImage>, String> {
+    let (source_path, base_image, is_raw) = get_original_image_with_path(state)?;
+    get_cached_full_warped_image_path_aware(
+        state,
+        &source_path,
+        base_image.as_ref(),
+        is_raw,
+        js_adjustments,
+    )
 }
 
 #[tauri::command]
@@ -466,6 +503,9 @@ fn process_preview_job(
         .filter_map(|def| {
             get_cached_or_generate_mask(
                 &state,
+                &loaded_image.path,
+                loaded_image.image.as_ref(),
+                loaded_image.is_raw,
                 def,
                 preview_width,
                 preview_height,
@@ -804,6 +844,9 @@ fn generate_uncropped_preview(
             .filter_map(|def| {
                 get_cached_or_generate_mask(
                     &state,
+                    &loaded_image.path,
+                    loaded_image.image.as_ref(),
+                    loaded_image.is_raw,
                     def,
                     preview_width,
                     preview_height,
@@ -1161,6 +1204,9 @@ fn generate_preset_preview(
         .filter_map(|def| {
             get_cached_or_generate_mask(
                 &state,
+                &loaded_image.path,
+                loaded_image.image.as_ref(),
+                loaded_image.is_raw,
                 def,
                 img_w,
                 img_h,
@@ -1587,8 +1633,14 @@ async fn generate_preview_for_path(
             .and_then(|m| serde_json::from_value(m.clone()).ok())
             .unwrap_or_default();
 
-        let warped_image =
-            resolve_warped_image_for_masks(&state, &js_adjustments, &mask_definitions);
+        let warped_image = resolve_warped_image_for_masks(
+            &state,
+            &source_path_str,
+            &base_image,
+            is_raw,
+            &js_adjustments,
+            &mask_definitions,
+        );
         let mask_bitmaps: Vec<ImageBuffer<Luma<u8>, Vec<u8>>> = mask_definitions
             .iter()
             .filter_map(|def| {

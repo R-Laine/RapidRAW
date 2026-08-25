@@ -424,7 +424,8 @@ fn process_image_for_export_pipeline(
         .and_then(|m| serde_json::from_value(m.clone()).ok())
         .unwrap_or_default();
 
-    let warped_image = resolve_warped_image_for_masks(state, js_adjustments, &mask_definitions);
+    let warped_image =
+        resolve_warped_image_for_masks(state, path, base_image, is_raw, js_adjustments, &mask_definitions);
     let mask_bitmaps: Vec<ImageBuffer<Luma<u8>, Vec<u8>>> = mask_definitions
         .iter()
         .filter_map(|def| {
@@ -685,7 +686,9 @@ fn export_masks_for_image(
         .and_then(|m| serde_json::from_value(m.clone()).ok())
         .unwrap_or_default();
 
-    let warped_image = resolve_warped_image_for_masks(state, js_adjustments, &mask_definitions);
+    let warped_image = resolve_warped_image_for_masks(
+        state, source_path_str, base_image, is_raw, js_adjustments, &mask_definitions,
+    );
     let mut mask_bitmaps = Vec::with_capacity(mask_definitions.len());
     for definition in &mask_definitions {
         ensure_export_not_cancelled(cancellation_token)?;
@@ -1488,6 +1491,9 @@ pub async fn estimate_export_sizes(
             .filter_map(|def| {
                 get_cached_or_generate_mask(
                     &state,
+                    &loaded_image.path,
+                    loaded_image.image.as_ref(),
+                    loaded_image.is_raw,
                     def,
                     img_w,
                     img_h,
@@ -1626,6 +1632,9 @@ pub async fn estimate_export_sizes(
             .filter_map(|def| {
                 get_cached_or_generate_mask(
                     &state,
+                    &source_path_str,
+                    &original_image,
+                    is_raw,
                     def,
                     preview_w,
                     preview_h,

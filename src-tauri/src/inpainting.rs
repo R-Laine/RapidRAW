@@ -28,12 +28,7 @@ pub async fn generate_manual_cleanup_patch(
         patches.retain(|p| p.get("id").and_then(|id| id.as_str()) != Some(&patch_definition.id));
     }
 
-    let is_raw = {
-        let guard = state.original_image.lock().unwrap();
-        guard.as_ref().map(|img| img.is_raw).unwrap_or(false)
-    };
-
-    let (base_image, _) = crate::get_original_image(&state)?;
+    let (source_path, base_image, is_raw) = crate::get_original_image_with_path(&state)?;
     let composited = composite_patches_on_image(&base_image, &source_image_adjustments)
         .map_err(|e| format!("Failed to prepare source image: {}", e))?;
 
@@ -67,6 +62,9 @@ pub async fn generate_manual_cleanup_patch(
 
     let warped_image = resolve_warped_image_for_masks(
         &state,
+        &source_path,
+        base_image.as_ref(),
+        is_raw,
         &current_adjustments,
         std::slice::from_ref(&mask_def_for_generation),
     );
@@ -337,12 +335,7 @@ pub async fn invoke_generative_replace_with_mask_def(
         patches.retain(|p| p.get("id").and_then(|id| id.as_str()) != Some(&patch_definition.id));
     }
 
-    let is_raw = {
-        let guard = state.original_image.lock().unwrap();
-        guard.as_ref().map(|img| img.is_raw).unwrap_or(false)
-    };
-
-    let (base_image, _) = crate::get_original_image(&state)?;
+    let (source_path, base_image, is_raw) = crate::get_original_image_with_path(&state)?;
     let composited = composite_patches_on_image(&base_image, &source_image_adjustments)
         .map_err(|e| format!("Failed to prepare source image: {}", e))?;
 
@@ -376,6 +369,9 @@ pub async fn invoke_generative_replace_with_mask_def(
 
     let warped_image = resolve_warped_image_for_masks(
         &state,
+        &source_path,
+        base_image.as_ref(),
+        is_raw,
         &current_adjustments,
         std::slice::from_ref(&mask_def_for_generation),
     );

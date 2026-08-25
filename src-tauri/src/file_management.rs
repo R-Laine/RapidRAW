@@ -1663,6 +1663,9 @@ pub fn generate_thumbnail_data(
             .filter_map(|def| {
                 crate::get_cached_or_generate_mask(
                     &state,
+                    &source_path_str,
+                    &cropped_preview,
+                    is_raw,
                     def,
                     preview_w,
                     preview_h,

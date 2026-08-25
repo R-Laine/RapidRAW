@@ -13,7 +13,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use crate::app_state::AppState;
-use crate::get_cached_full_warped_image;
+use crate::get_cached_full_warped_image_path_aware;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(crate = "serde")]
@@ -1411,9 +1411,13 @@ pub fn generate_mask_overlay(
 
     let scaled_crop_offset = (crop_offset.0 * scale, crop_offset.1 * scale);
 
-    let warped_image = js_adjustments.as_ref().and_then(|adj| {
-        resolve_warped_image_for_masks(&state, adj, std::slice::from_ref(&parsed_mask_def))
-    });
+    let warped_image = if parsed_mask_def.requires_warped_image() {
+        js_adjustments
+            .as_ref()
+            .and_then(|adj| crate::get_cached_full_warped_image(&state, adj).ok())
+    } else {
+        None
+    };
 
     if let Some(gray_mask) = generate_mask_bitmap(
         &parsed_mask_def,
@@ -1446,11 +1450,14 @@ pub fn generate_mask_overlay(
 
 pub fn resolve_warped_image_for_masks(
     state: &tauri::State<AppState>,
+    path: &str,
+    base_image: &DynamicImage,
+    is_raw: bool,
     adjustments: &serde_json::Value,
     masks: &[MaskDefinition],
 ) -> Option<Arc<DynamicImage>> {
     if masks.iter().any(|m| m.requires_warped_image()) {
-        get_cached_full_warped_image(state, adjustments).ok()
+        get_cached_full_warped_image_path_aware(state, path, base_image, is_raw, adjustments).ok()
     } else {
         None
     }
@@ -1458,6 +1465,9 @@ pub fn resolve_warped_image_for_masks(
 
 pub fn get_cached_or_generate_mask(
     state: &tauri::State<AppState>,
+    path: &str,
+    base_image: &DynamicImage,
+    is_raw: bool,
     def: &MaskDefinition,
     width: u32,
     height: u32,
@@ -1466,6 +1476,8 @@ pub fn get_cached_or_generate_mask(
     adjustments: &serde_json::Value,
 ) -> Option<GrayImage> {
     let mut hasher = DefaultHasher::new();
+
+    path.hash(&mut hasher);
 
     let mut def_for_hash = def.clone();
     def_for_hash.adjustments = serde_json::Value::Null;
@@ -1487,8 +1499,9 @@ pub fn get_cached_or_generate_mask(
         }
     }
 
-    let warped_image =
-        resolve_warped_image_for_masks(state, adjustments, std::slice::from_ref(def));
+    let warped_image = resolve_warped_image_for_masks(
+        state, path, base_image, is_raw, adjustments, std::slice::from_ref(def),
+    );
 
     let generated = generate_mask_bitmap(
         def,
