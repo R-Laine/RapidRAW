@@ -253,7 +253,9 @@ impl Lens {
             return my_canonical;
         }
 
-        if let Some(cf) = self.cropfactor {
+        if let Some(cf) = self.cropfactor
+            && (cf - 1.0).abs() > 0.01
+        {
             format!("{} (crop {:.1}x)", my_canonical_short, cf)
         } else {
             my_canonical_short
@@ -640,14 +642,103 @@ pub fn get_lensfun_lenses_for_maker(
     }
 }
 
+impl Camera {
+    pub fn get_full_model_name(&self) -> String {
+        self.model
+            .iter()
+            .find(|m| m.lang.as_deref() == Some("en"))
+            .or_else(|| self.model.first())
+            .map(|m| m.value.clone())
+            .unwrap_or_else(|| "Unknown Model".to_string())
+    }
+
+    pub fn get_canonical_model_name(&self) -> String {
+        self.model
+            .iter()
+            .find(|m| m.lang.is_none())
+            .or_else(|| self.model.first())
+            .map(|m| m.value.clone())
+            .unwrap_or_else(|| "Unknown Model".to_string())
+    }
+
+    pub fn get_maker(&self) -> String {
+        self.maker
+            .iter()
+            .find(|m| m.lang.as_deref() == Some("en"))
+            .or_else(|| self.maker.first())
+            .map(|m| m.value.clone())
+            .unwrap_or_else(|| "Misc".to_string())
+    }
+}
+
+/// Resolve the camera body's crop factor from the lens database, if the body can
+/// be matched by name. Returns `None` when no camera info is available.
+fn find_camera_cropfactor(
+    db: &LensDatabase,
+    camera_model: &str,
+    matcher: &fuzzy_matcher::skim::SkimMatcherV2,
+) -> Option<f32> {
+    let clean_camera = camera_model.trim().trim_matches('"');
+    if clean_camera.is_empty() {
+        return None;
+    }
+
+    db.cameras
+        .iter()
+        .filter_map(|cam| {
+            let full = cam.get_full_model_name();
+            let canonical = cam.get_canonical_model_name();
+            let score = matcher
+                .fuzzy_match(&full, clean_camera)
+                .unwrap_or(0)
+                .max(matcher.fuzzy_match(&canonical, clean_camera).unwrap_or(0));
+            if score > 0 {
+                Some((score, cam.cropfactor))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|(score, _)| *score)
+        .map(|(_, cf)| cf)
+}
+
+/// Compatibility between a lens profile and the capturing body's sensor.
+///
+/// Returns `1` when the lens's declared crop factor matches the camera body, and
+/// `0` otherwise. When no camera body is known, it defaults to favouring the
+/// full-frame (crop factor ≈ 1.0) variant on exact score ties, which is the
+/// common case and avoids pinning a full-frame body to an APS-C profile.
+fn lens_crop_compat(camera_cropfactor: Option<f32>, lens: &Lens) -> u8 {
+    match (camera_cropfactor, lens.cropfactor) {
+        (Some(cam), Some(lens_cf)) => {
+            if (lens_cf - cam).abs() < 0.05 {
+                1
+            } else {
+                0
+            }
+        }
+        (None, Some(lens_cf)) => {
+            if lens_cf <= 1.01 {
+                1
+            } else {
+                0
+            }
+        }
+        _ => 0,
+    }
+}
+
 pub fn find_best_lens_match(
     db: &LensDatabase,
     maker: &str,
     model: &str,
+    camera_model: &str,
 ) -> Option<(String, String)> {
     let clean_maker = maker.trim().trim_matches('"').to_string();
     let clean_model = model.trim().trim_matches('"').to_string();
     let matcher = fuzzy_matcher::skim::SkimMatcherV2::default().ignore_case();
+
+    let camera_cropfactor = find_camera_cropfactor(db, camera_model, &matcher);
 
     let lenses_from_maker: Vec<&Lens> = db
         .lenses
@@ -684,7 +775,14 @@ pub fn find_best_lens_match(
                     None
                 }
             })
-            .max_by_key(|(score, _)| *score);
+            .max_by(|(score_a, lens_a), (score_b, lens_b)| {
+                score_a
+                    .cmp(score_b)
+                    .then_with(|| {
+                        lens_crop_compat(camera_cropfactor, lens_a)
+                            .cmp(&lens_crop_compat(camera_cropfactor, lens_b))
+                    })
+            });
 
         if let Some((_, best_lens)) = best_match {
             return Some((
@@ -709,9 +807,20 @@ pub fn find_best_lens_match(
                 .unwrap_or(0);
             let score = score_english.max(score_canonical);
 
-            if score > 0 { Some((score, lens)) } else { None }
+            if score > 0 {
+                Some((score, lens))
+            } else {
+                None
+            }
         })
-        .max_by_key(|(score, _): &(i64, _)| *score);
+        .max_by(|(score_a, lens_a), (score_b, lens_b)| {
+            score_a
+                .cmp(score_b)
+                .then_with(|| {
+                    lens_crop_compat(camera_cropfactor, lens_a)
+                        .cmp(&lens_crop_compat(camera_cropfactor, lens_b))
+                })
+        });
 
     if let Some((_, best_lens)) = best_match_fallback {
         let lens_maker = best_lens.get_maker();
@@ -726,6 +835,7 @@ pub fn find_best_lens_match(
 pub fn autodetect_lens(
     maker: String,
     model: String,
+    camera_model: String,
     state: tauri::State<AppState>,
 ) -> Result<Option<(String, String)>, String> {
     let db_guard = state
@@ -733,7 +843,7 @@ pub fn autodetect_lens(
         .lock()
         .map_err(|e| format!("Lock poisoned: {}", e))?;
     if let Some(db) = &*db_guard {
-        Ok(find_best_lens_match(db, &maker, &model))
+        Ok(find_best_lens_match(db, &maker, &model, &camera_model))
     } else {
         Ok(None)
     }
